@@ -1,0 +1,3 @@
+# Build-only dependency for injecting chat modules into the original archive.
+pyinstaller>=6.0
+uiautomation>=2.0.29
