@@ -15,7 +15,7 @@ from chat_pet.persona import (
 
 class PersonaTests(unittest.TestCase):
     def test_persona_contains_core_character_and_speech_rules(self) -> None:
-        self.assertEqual(APP_VERSION, "2.3.2")
+        self.assertEqual(APP_VERSION, "3.0.2")
         self.assertEqual(PERSONA_VERSION, "2.1.0")
         for marker in (
             "蓝色鲸鱼",

@@ -403,6 +403,20 @@ class QQMonitorTests(unittest.TestCase):
             self.assertTrue(first_store.load().auto_send)
             self.assertFalse(QQSettingsStore(path).load().auto_send)
 
+    def test_napcat_token_is_encrypted_and_round_trips(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "qq.json"
+            store = QQSettingsStore(path)
+            store.save(
+                QQSettings(
+                    napcat_url="ws://127.0.0.1:3001",
+                    napcat_token="local-secret-token",
+                )
+            )
+            raw = path.read_text(encoding="utf-8")
+            self.assertNotIn("local-secret-token", raw)
+            self.assertEqual(store.load().napcat_token, "local-secret-token")
+
     def test_random_event_defaults_and_weight_switches(self) -> None:
         settings = QQSettings(
             enabled=True,

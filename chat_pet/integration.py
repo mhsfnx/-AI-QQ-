@@ -95,7 +95,7 @@ def _patch_pet_window(pet_class: type) -> None:
         if controller is None:
             return menu
         ai_action = QAction("AI 聊天", menu)
-        qq_action = QAction("QQ 自动回复", menu)
+        qq_action = QAction("NapCat QQ 助手", menu)
         icon_path = resource_dir() / "sprites" / "icon.png"
         if icon_path.exists():
             ai_action.setIcon(QIcon(str(icon_path)))
@@ -240,7 +240,7 @@ def _instrument_menu_actions(controller, menu) -> None:  # type: ignore[no-untyp
         label = action.text().replace("&", "").strip()
         if (
             not label
-            or label in {"AI 聊天", "QQ 自动回复", "打开聊天…"}
+            or label in {"AI 聊天", "NapCat QQ 助手", "打开聊天…"}
             or action.isSeparator()
         ):
             continue

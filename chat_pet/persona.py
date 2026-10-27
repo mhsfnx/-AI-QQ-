@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-APP_VERSION = "2.3.2"
+APP_VERSION = "3.0.2"
 PERSONA_VERSION = "2.1.0"
 PERSONA_NAME = "大肥鱼"
 

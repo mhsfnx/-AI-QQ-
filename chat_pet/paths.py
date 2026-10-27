@@ -70,3 +70,11 @@ def stickers_dir() -> Path:
     )
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def napcat_dir() -> Path:
+    return app_base_dir() / "napcat"
+
+
+def napcat_runtime_dir() -> Path:
+    return napcat_dir() / "runtime"

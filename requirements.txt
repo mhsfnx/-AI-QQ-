@@ -1,3 +1,7 @@
-# Build-only dependency for injecting chat modules into the original archive.
 pyinstaller>=6.0
-uiautomation>=2.0.29
+PySide6==6.11.2
+requests
+psutil
+pynvml
+websocket-client>=1.8.0
+winsdk==1.0.0b10

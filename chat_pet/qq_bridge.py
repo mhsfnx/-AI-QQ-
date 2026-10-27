@@ -20,6 +20,7 @@ from .config import ConfigStore
 from .database import Database
 from .paths import data_dir
 from .persona import task_system_prompt
+from .security import CredentialError, protect_secret, unprotect_secret
 
 
 class QQBridgeError(RuntimeError):
@@ -46,6 +47,9 @@ class QQSettings:
     random_group_enabled: bool = True
     random_friend_enabled: bool = True
     random_qzone_enabled: bool = True
+    napcat_url: str = "ws://127.0.0.1:3001"
+    napcat_token: str = ""
+    napcat_auto_start: bool = False
 
 
 @dataclass(slots=True)
@@ -162,6 +166,13 @@ class QQSettingsStore:
             poll_seconds = int(payload.get("poll_seconds", 4))
         except (TypeError, ValueError):
             poll_seconds = 4
+        napcat_token = ""
+        protected = payload.get("napcat_token_protected")
+        if isinstance(protected, str) and protected:
+            try:
+                napcat_token = unprotect_secret(protected)
+            except CredentialError:
+                napcat_token = ""
         return QQSettings(
             enabled=bool(payload.get("enabled", False)),
             poll_seconds=max(2, min(poll_seconds, 60)),
@@ -215,6 +226,12 @@ class QQSettingsStore:
             random_group_enabled=bool(payload.get("random_group_enabled", True)),
             random_friend_enabled=bool(payload.get("random_friend_enabled", True)),
             random_qzone_enabled=bool(payload.get("random_qzone_enabled", True)),
+            napcat_url=str(
+                payload.get("napcat_url", "ws://127.0.0.1:3001")
+            ).strip()
+            or "ws://127.0.0.1:3001",
+            napcat_token=napcat_token,
+            napcat_auto_start=bool(payload.get("napcat_auto_start", False)),
         )
 
     def save(self, settings: QQSettings) -> None:
@@ -225,6 +242,11 @@ class QQSettingsStore:
         # restarting the desktop pet.
         payload["auto_send"] = False
         payload["dry_run"] = True
+        payload.pop("napcat_token", None)
+        if settings.napcat_token.strip():
+            payload["napcat_token_protected"] = protect_secret(
+                settings.napcat_token.strip()
+            )
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_name(self.path.name + ".tmp")
         temporary.write_text(

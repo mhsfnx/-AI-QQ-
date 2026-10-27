@@ -37,12 +37,11 @@ from .chat_style import split_chat_reply
 from .config import AppConfig
 from .database import Interaction
 from .image_ocr import extract_image_text
+from .napcat_bridge import NapCatError, NapCatMonitorService, NapCatRuntime
 from .paths import resolve_app_path, resource_dir
 from .persona import APP_VERSION, PERSONA_VERSION
 from .qq_bridge import (
-    QQBridgeError,
     QQInitiativeResult,
-    QQMonitorService,
     QQScanResult,
     QQSettings,
     QQSettingsStore,
@@ -125,10 +124,13 @@ class IntegratedChatController(QObject):
         self.chat_dialog: ChatDialog | None = None
         self.qq_dialog: QQBridgeDialog | None = None
         self.qq_settings_store = QQSettingsStore()
-        self.qq_monitor = QQMonitorService(
+        self.napcat_runtime = NapCatRuntime()
+        self.qq_monitor = NapCatMonitorService(
             self.database,
             self.qq_settings_store,
             self.config_store,
+            runtime=self.napcat_runtime,
+            sticker_selector=self.sticker_selector,
         )
         self.qq_timer = QTimer(self)
         self.qq_timer.timeout.connect(self._qq_tick)
@@ -212,10 +214,12 @@ class IntegratedChatController(QObject):
     def apply_qq_settings(self, settings: QQSettings | None = None) -> None:
         settings = settings or self.qq_settings_store.load()
         if settings.enabled:
-            self.qq_timer.start(settings.poll_seconds * 1000)
+            self.qq_monitor.ensure_client(settings, auto_start=True)
+            self.qq_timer.start(1000)
             QTimer.singleShot(250, self._qq_tick)
         else:
             self.qq_timer.stop()
+            self.qq_monitor.stop()
         if settings.random_events_enabled:
             interval_ms = max(
                 1,
@@ -238,16 +242,10 @@ class IntegratedChatController(QObject):
 
         def work() -> QQScanResult:
             try:
-                import comtypes
-
-                comtypes.CoInitialize()
-                try:
-                    return self.qq_monitor.scan_once(force=force)
-                finally:
-                    comtypes.CoUninitialize()
+                return self.qq_monitor.scan_once(force=force)
             except Exception as exc:
-                logging.exception("QQ read-only scan failed")
-                raise QQBridgeError(str(exc)) from exc
+                logging.exception("NapCat scan failed")
+                raise NapCatError(str(exc)) from exc
 
         self.start_task(work, self._qq_succeeded, self._qq_failed)
 
@@ -264,7 +262,9 @@ class IntegratedChatController(QObject):
             self.qq_dialog.set_result(result)
         if self.chat_dialog is not None:
             self.chat_dialog.reload_interactions()
-        if result.drafts_created:
+        if result.sent_count:
+            self.pet.say(f"NapCat 已发送 {result.sent_count} 条 QQ 短消息。")
+        elif result.drafts_created:
             self.pet.say("QQ 收到一条需要回复的消息，我已经写好草稿，没有发送。")
 
     def _qq_failed(self, message: str) -> None:
@@ -272,6 +272,14 @@ class IntegratedChatController(QObject):
         logging.info("QQ bridge unavailable: %s", message)
         if self.qq_dialog is not None:
             self.qq_dialog.set_error(message)
+
+    def start_napcat(self) -> str:
+        message = self.qq_monitor.start_napcat()
+        self.qq_monitor.ensure_client(self.qq_settings_store.load())
+        return message
+
+    def napcat_webui_url(self) -> str:
+        return self.qq_monitor.open_webui()
 
     def _random_event_tick(self) -> None:
         if self.random_event_busy or self.qq_busy:
@@ -288,16 +296,10 @@ class IntegratedChatController(QObject):
 
         def work() -> QQInitiativeResult:
             try:
-                import comtypes
-
-                comtypes.CoInitialize()
-                try:
-                    return self.qq_monitor.run_random_event()
-                finally:
-                    comtypes.CoUninitialize()
+                return self.qq_monitor.run_random_event()
             except Exception as exc:
-                logging.exception("Random QQ event failed")
-                raise QQBridgeError(str(exc)) from exc
+                logging.exception("Random NapCat event failed")
+                raise NapCatError(str(exc)) from exc
 
         self.start_task(
             work,
@@ -784,7 +786,7 @@ class QQBridgeDialog(QDialog):
         super().__init__(None)
         self.controller = controller
         self.settings = controller.qq_settings_store.load()
-        self.setWindowTitle("QQ 消息助手")
+        self.setWindowTitle("NapCat QQ 消息助手")
         self.setWindowFlag(Qt.Window, True)
         self.setWindowFlag(Qt.WindowStaysOnTopHint, False)
         self.setWindowModality(Qt.NonModal)
@@ -799,13 +801,13 @@ class QQBridgeDialog(QDialog):
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
-        title = QLabel("QQ 消息助手")
+        title = QLabel("NapCat QQ 消息助手")
         title.setStyleSheet("font-size:17px;font-weight:700;color:#27395f;")
         layout.addWidget(title)
         warning = QLabel(
-            "读取私聊和群聊 @ 消息并生成回复。默认只保存草稿；只有勾选并"
-            "确认“自动发送”后才会操作 QQ 发送按钮。发现其他会话有新动态时会"
-            "切换到该会话并停留；普通轮询不会把 QQ 抢到前台。"
+            "通过本地 NapCat OneBot WebSocket 接收私聊和群聊 @ 消息并直接调用"
+            "发送接口，不再操作 QQ 窗口、鼠标或键盘。项目内包含独立的"
+            " QQ 9.9.33 与 NapCat 运行目录，不再修改系统中已安装的 QQ。"
         )
         warning.setWordWrap(True)
         warning.setStyleSheet(
@@ -824,7 +826,13 @@ class QQBridgeDialog(QDialog):
         reply_layout = QVBoxLayout(reply_tab)
         reply_layout.setContentsMargins(10, 10, 10, 10)
         form = QFormLayout()
-        self.enabled = QCheckBox("启用 QQ 消息助手")
+        self.enabled = QCheckBox("启用 NapCat 消息助手")
+        self.napcat_auto_start = QCheckBox("桌宠启动时自动启动 NapCat")
+        self.napcat_url = QLineEdit()
+        self.napcat_url.setPlaceholderText("ws://127.0.0.1:3001")
+        self.napcat_token = QLineEdit()
+        self.napcat_token.setEchoMode(QLineEdit.Password)
+        self.napcat_token.setPlaceholderText("本地 WebSocket Token，可留空")
         self.private_enabled = QCheckBox("监听私聊")
         self.group_enabled = QCheckBox("监听群聊中被 @ 的消息")
         self.auto_send = QCheckBox("自动发送 AI 回复（仅建议测试账号）")
@@ -836,14 +844,16 @@ class QQBridgeDialog(QDialog):
             "填写你的 QQ 昵称或群昵称，每行一个；用于识别群聊中的 @你"
         )
         form.addRow("状态", self.enabled)
+        form.addRow("NapCat WebSocket", self.napcat_url)
+        form.addRow("访问 Token", self.napcat_token)
+        form.addRow("", self.napcat_auto_start)
         form.addRow("消息范围", self.private_enabled)
         form.addRow("", self.group_enabled)
         form.addRow("", self.auto_send)
-        form.addRow("扫描间隔（秒）", self.interval)
         form.addRow("你的 @ 名称", self.own_names)
         reply_layout.addLayout(form)
 
-        self.status = QLabel("尚未扫描")
+        self.status = QLabel("NapCat 尚未连接")
         self.status.setWordWrap(True)
         self.status.setObjectName("muted")
         reply_layout.addWidget(self.status)
@@ -960,15 +970,21 @@ class QQBridgeDialog(QDialog):
         buttons = QHBoxLayout()
         save = QPushButton("保存设置")
         save.clicked.connect(self.save)
-        scan = QPushButton("立即扫描")
+        scan = QPushButton("检查新消息")
         scan.setObjectName("primary")
         scan.clicked.connect(self.scan_now)
+        start_napcat = QPushButton("启动 NapCat")
+        start_napcat.clicked.connect(self.start_napcat)
+        webui = QPushButton("打开 WebUI")
+        webui.clicked.connect(self.open_webui)
         close = QPushButton("关闭")
         close.clicked.connect(self.close)
         api_button = QPushButton("设置 AI API")
         api_button.clicked.connect(self._open_api_settings)
         buttons.addWidget(save)
         buttons.addWidget(scan)
+        buttons.addWidget(start_napcat)
+        buttons.addWidget(webui)
         buttons.addWidget(api_button)
         buttons.addStretch(1)
         buttons.addWidget(close)
@@ -976,6 +992,9 @@ class QQBridgeDialog(QDialog):
 
     def _load_settings(self) -> None:
         self.enabled.setChecked(self.settings.enabled)
+        self.napcat_url.setText(self.settings.napcat_url)
+        self.napcat_token.setText(self.settings.napcat_token)
+        self.napcat_auto_start.setChecked(self.settings.napcat_auto_start)
         self.private_enabled.setChecked(self.settings.scan_private)
         self.group_enabled.setChecked(self.settings.scan_group)
         self.auto_send.setChecked(self.settings.auto_send)
@@ -1008,6 +1027,8 @@ class QQBridgeDialog(QDialog):
             self.set_result(self.controller.qq_last_result)
         if self.controller.random_last_result is not None:
             self.set_initiative_result(self.controller.random_last_result)
+        if self.controller.qq_last_result is None:
+            self.status.setText(self.controller.qq_monitor.connection_status())
 
     def _refresh_api_state(self) -> None:
         config = self.controller.config_store.load()
@@ -1026,8 +1047,7 @@ class QQBridgeDialog(QDialog):
 
     def refresh_settings(self) -> None:
         self.settings = self.controller.qq_settings_store.load()
-        if not self.enabled.isChecked() and self.settings.enabled:
-            self._load_settings()
+        self._load_settings()
 
     def _collect_settings(self) -> QQSettings:
         names = [
@@ -1054,6 +1074,10 @@ class QQBridgeDialog(QDialog):
             random_group_enabled=self.random_group_enabled.isChecked(),
             random_friend_enabled=self.random_friend_enabled.isChecked(),
             random_qzone_enabled=self.random_qzone_enabled.isChecked(),
+            napcat_url=self.napcat_url.text().strip()
+            or "ws://127.0.0.1:3001",
+            napcat_token=self.napcat_token.text().strip(),
+            napcat_auto_start=self.napcat_auto_start.isChecked(),
         )
 
     def save(self) -> None:
@@ -1078,9 +1102,12 @@ class QQBridgeDialog(QDialog):
         self.settings = settings
         self.controller.apply_qq_settings(settings)
         self.status.setText(
-            "QQ 消息助手已启用，正在等待扫描"
+            (
+                "NapCat 消息助手已启用，正在连接 "
+                f"{settings.napcat_url}"
+            )
             if settings.enabled
-            else "QQ 消息助手已停止"
+            else "NapCat 消息助手已停止"
         )
         self.random_status.setText(
             (
@@ -1100,8 +1127,21 @@ class QQBridgeDialog(QDialog):
                     "AI API 未配置",
                     "请先点击“设置 AI API”填写密钥；当前只能读取 QQ，无法生成草稿。",
                 )
-            self.status.setText("正在扫描 QQ…")
+            self.status.setText("正在检查 NapCat 事件…")
             self.controller.scan_qq_now(force=True)
+
+    def start_napcat(self) -> None:
+        self.save()
+        try:
+            message = self.controller.start_napcat()
+        except Exception as exc:
+            QMessageBox.critical(self, "NapCat 启动失败", str(exc))
+            return
+        self.status.setText(message)
+        QTimer.singleShot(8000, self.open_webui)
+
+    def open_webui(self) -> None:
+        QDesktopServices.openUrl(QUrl(self.controller.napcat_webui_url()))
 
     def set_result(self, result: QQScanResult) -> None:
         extra = (

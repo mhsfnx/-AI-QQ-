@@ -9,7 +9,7 @@
 推荐解压根目录的完整压缩包后运行：
 
 ```text
-大肥鱼桌宠AI整合版-v2.3.2.zip
+大肥鱼桌宠AI整合版-v3.0.2.zip
 ```
 
 首次运行且不存在原桌宠配置时，默认天气地点为北京，默认尺寸为“小”（0.54）；之后仍可在原桌宠设置中修改。
@@ -89,25 +89,31 @@ stickers\
 两条正常对话消息之间的同类互动会合并显示，例如“你戳了戳大肥鱼 ×3”。
 成功发送 QQ 回复后，也会在聊天页记录“回复了「会话名」”，并在同一记录段内统计消息条数。
 
-## QQ 自动回复（测试版）
+## NapCat QQ 消息助手
 
-聊天窗口顶部的 **QQ** 按钮或右键菜单的 **QQ 自动回复** 可以打开设置。此版本采用 Windows UI Automation，只控制已登录 QQ 的可见界面，不注入 QQ 进程，也不会读取登录凭证。
+3.0.0 已彻底移除通过 Windows UI 自动化操作 QQ 窗口的方式。聊天窗口顶部的 **QQ** 按钮或右键菜单的 **NapCat QQ 助手** 可以打开控制面板。3.0.1 改为原生重建 EXE，不再改写原 PyInstaller 主体，修复 Microsoft Defender 将旧整合版误判为 `Trojan:Win32/Bearfoos.A!ml` 并隔离的问题。
 
-- 私聊有新消息时生成 AI 回复草稿。
-- 群聊只有检测到你填写的 `@昵称` 时才生成草稿。
-- 默认只把草稿写入本地 SQLite，不点击 QQ 发送按钮。
-- 在 QQ 消息助手内显式勾选“自动发送 AI 回复”后，才会发送符合条件的回复。
-- 自动发送只在本次桌宠运行期间有效；每次重新启动都会恢复为关闭。
-- 自动发送前会检查目标会话、最后消息方向、输入框残留和单会话冷却时间。
-- 会轮询会话列表；其他会话有新动态时，会切换到该会话并停留，不再自动返回原会话。
-- 每轮只切换到一个有新消息的会话，避免连续跳动。
-- 自动切换可能将对应 QQ 会话标记为已读。
-- 可在设置中填写自己的 QQ 昵称或群昵称，每行一个。
-- 正常轮询不会把 QQ 抢到前台；只有检测到新消息并切换会话时才置前。
-- QQ 主窗口需要保持未最小化，否则 UI Automation 无法读取消息。
-- QQ 消息助手是普通独立窗口，不会始终保持在其他程序上方。
+QQ 消息现在通过本机 NapCat 的 OneBot 11 WebSocket 收发：
 
-QQ 消息保存在同一数据库的 `qq_conversations`、`qq_messages` 和 `qq_drafts` 表中。QQ 界面更新后，控件定位可能需要重新适配。
+- 不需要切换 QQ 会话、模拟鼠标、模拟键盘或抢占前台。
+- 私聊消息会直接进入事件流。
+- 群聊只处理明确 @ 当前 QQ 的消息。
+- 回复通过 `send_private_msg` / `send_group_msg` 接口发送。
+- 不超过 100 字的回复会拆成多个独立短消息逐条发送。
+- 本地命名表情包可以通过 NapCat 图片消息段发送。
+
+3.0.2 使用项目内已经验证可运行的 `napcat/standalone/NapCat.52230.Shell`，其中包含独立的 QQ 9.9.33、NapCat v4.18.41 和 WebUI，不再修改系统已安装 QQ 的入口文件。
+
+首次配置：
+
+1. 打开 **NapCat QQ 助手**，启用消息助手并填写 WebSocket 地址，默认 `ws://127.0.0.1:3001`。
+2. 点击 **启动 NapCat**，桌宠会启动项目内独立的 QQ 9.9.33 + NapCat。
+3. 等待 WebUI 自动打开，在 NapCat 页面完成独立 QQ 的扫码登录。
+4. 勾选需要的私聊/群聊范围；确认草稿正常后再考虑开启自动发送。
+
+自动发送仍只在本次运行期间有效，每次重启默认关闭。NapCat 的访问 Token 使用 Windows DPAPI 加密保存。NapCat 是第三方项目，使用前请阅读 `napcat/LICENSE-NapCat.txt` 与 `napcat/README-NapCat.txt`。
+
+QQ 消息保存在同一数据库的 `qq_conversations`、`qq_messages` 和 `qq_drafts` 表中。
 
 ## 定时随机主动事件
 
@@ -142,19 +148,21 @@ QQ 消息保存在同一数据库的 `qq_conversations`、`qq_messages` 和 `qq_
 ## 源码结构
 
 - `chat_pet/`：共享 Agent 人设、API、SQLite、自动记忆、PySide6 聊天界面和原程序运行时装饰。
-- `tools/patch_original_archive.py`：将聊天模块写入原 PyInstaller 归档。
-- `tools/dafeiyu_ai_entry.py`：调用原主模块并先安装集成装饰的新入口。
+- `napcat/`：NapCat OneBot 桥接、启动器说明和随包运行环境。
+- `tools/dafeiyu_clean_entry.py`：加载原桌宠主体并安装聊天集成。
+- `tools/extract_original_code.py`：从旧发布包提取原主体运行模块。
+- `大肥鱼桌宠-clean.spec`：3.0.1 原生 PyInstaller 构建配置。
 - `tests/`：API、数据库、记忆和端到端服务测试。
 
 ## 重新构建
 
+3.0.1 不再改写原 PyInstaller 主体。构建环境需要使用 Python 3.12.10、PySide6 6.11.2 和 PyInstaller 6.22.x；`packaging/runtime` 保存原桌宠界面与 Qt 运行资源。
+
 ```powershell
-.\build_integrated.ps1 `
-  -SourceExe "D:\你的备份项目\大肥鱼桌宠.exe" `
-  -InstallDirectory "D:\需要安装到的目录"
+python -m PyInstaller --noconfirm --clean .\大肥鱼桌宠-clean.spec
 ```
 
-项目内不再保存原版启动器。`-SourceExe` 指向其他项目中未经修改的原版 EXE，它旁边必须保留原始 `_internal` 文件夹。输出位于 `dist\大肥鱼桌宠AI整合版\`；`-InstallDirectory` 是可选参数，仅用于额外复制一份到其他目录。
+构建后把 `stickers`、`napcat/runtime`、NapCat 许可证和说明文件复制到 `dist\大肥鱼桌宠\`。不要再使用旧版直接改写原 EXE 的打包方式。
 
 ## 验证
 
